@@ -20,10 +20,9 @@ public:
         port_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
     }
 
-    void connect(std::function<void(const std::string&)> callback) {
+    void connect(std::function<void(const uint8_t*, size_t)> callback) {
         callback_ = callback;
         do_read();
-        return;
     }
 
 private:
@@ -31,40 +30,44 @@ private:
     boost::asio::deadline_timer timer_;
     enum { max_read_length = 1024 };
     char data_[max_read_length];
-    std::function<void(const std::string&)> callback_;
+    std::function<void(const uint8_t*, size_t)> callback_;
     bool connected_;
 
 private:
     void do_read() {
         if (!connected_) return;
-        // async_read(port_, buffer(data_, max_read_length), boost::bind(&SerialPortReader::read_complete, this, boost::placeholders::_1, boost::placeholders::_2), 
-        //            boost::bind(&SerialPortReader::read_callback, this, boost::placeholders::_1, boost::placeholders::_2));
-        async_read(port_, boost::asio::buffer(data_, max_read_length), 
-                   boost::bind(&SerialPortReader::read_callback, this, boost::placeholders::_1, boost::placeholders::_2));
-        return;
+        boost::asio::async_read(port_, boost::asio::buffer(data_, max_read_length), 
+                boost::bind(&SerialPortReader::read_complete, this, boost::placeholders::_1, boost::placeholders::_2), 
+                boost::bind(&SerialPortReader::read_callback, this, boost::placeholders::_1, boost::placeholders::_2));
     }
 
-    void read_complete(const boost::system::error_code& error, size_t bytes_transferred) {
-        if (error || !connected_) return;
+    bool read_complete(const boost::system::error_code& error, size_t bytes_transferred) {
+        if (error || !connected_) return false;
         timer_.expires_from_now(boost::posix_time::milliseconds(10));
         timer_.async_wait(boost::bind(&SerialPortReader::do_read, this));
-        return;
+        return false;
     }
 
     void read_callback(const boost::system::error_code& error, size_t bytes_transferred) {
         if (error || !connected_) return;
-        std::string str(data_, bytes_transferred);
-        callback_(str);
+
+        uint8_t* data_copy = new uint8_t[bytes_transferred];
+        std::copy(data_, data_ + bytes_transferred, data_copy);
+
+        callback_(data_copy, bytes_transferred);
         do_read();
-        return;
     }
 };
 
 int main() {
     boost::asio::io_service io;
     SerialPortReader reader(io, "/dev/ttyUSB0", 9600);
-    reader.connect([](const std::string& str) {
-        std::cout << "Received: " << str;
+    reader.connect([](const uint8_t* data, size_t length) {
+        std::cout << "Received: ";
+        for(int i=0;i<length;i++){
+            std::cout << std::hex << int(data[i]) << "_";
+        }
+        std::cout << std::endl;
     });
     io.run();
     return 0;
