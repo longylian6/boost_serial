@@ -1,2 +1,2 @@
 # boost_serial
-Serial port reading using Boost library implemented through callback function.
+使用boost库实现串口读取并以回调函数方式处理
