@@ -56,6 +56,8 @@ private:
 
         callback_(data_copy, bytes_transferred);
         do_read();
+
+        delete[] data_copy;
     }
 };
 
