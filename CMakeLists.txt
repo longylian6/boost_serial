@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.10)
 project(boost_serial)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -15,6 +15,7 @@ include_directories(${Boost_INCLUDE_DIR})
 
 add_executable(main
     main.cpp
+    boost_serial.cpp
 )
 target_link_libraries(main 
     ${Boost_LIBRARIES}
