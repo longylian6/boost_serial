@@ -1,151 +1,173 @@
-#include <iostream>
-#include <string>
-#include <functional>
 
 #include <boost/asio.hpp>
-#include <boost/bind.hpp>
+#include <mutex>
+#include <thread>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
+#include <boost/bind.hpp>
 #include <boost/functional.hpp>
-#include <boost/thread.hpp>
+
+const size_t Boost_Serial_Max_Read_Buf_Len = 50;
 
 class BoostSerial {
+private:
+    typedef std::function<void(const uint8_t*, const size_t&)> ReadCallback;
+
 public:
-    BoostSerial() : asio_ios_(), asio_port_(asio_ios_), timer_(asio_ios_), 
-                    is_open_(false), callback_(nullptr) {}
-    ~BoostSerial() { close(); }
+    BoostSerial();
+    ~BoostSerial();
 
-    void open(const std::string& port_name, size_t baud_rate) {
-        if (is_open_) {
-            printf("Port %s is already open\n", port_name.c_str());
-            return;
-        }
-        printf("Opening port %s\n", port_name.c_str());
-        try {
-            asio_port_.open(port_name);
-        } catch (boost::system::system_error& e) {
-            printf("Error opening port %s: %s\n", port_name.c_str(), e.what());
-            return;
-        }
-        if (!asio_port_.is_open()) {
-            printf("Error opening port %s\n", port_name.c_str());
-            return;
-        }
-        is_open_ = true;
-        asio_port_.set_option(boost::asio::serial_port_base::baud_rate(baud_rate));
-        asio_port_.set_option(boost::asio::serial_port_base::character_size(8));
-        asio_port_.set_option(boost::asio::serial_port_base::stop_bits(boost::asio::serial_port_base::stop_bits::one));
-        asio_port_.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
-        asio_port_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
-
-        doRead();
-    }
-
-    inline bool isOpen() const { return is_open_; }
-
-    void close() {
-        if (!is_open_) return;
-        
-        asio_port_.cancel();
-        asio_ios_.stop();
-
-        asio_ios_.reset();
-        asio_port_.close();
-
-        is_open_ = false;
-    }
-
-    void setCallback(std::function<void(const uint8_t*, size_t)> callback) {
-        callback_ = callback;
-    }
-
-    void run() {
-        if (!is_open_) return;
-        asio_ios_.run();
-    }
-
-    bool write(const uint8_t* data, size_t length) {
-        if (!is_open_) return false;
-        boost::asio::write(asio_port_, boost::asio::buffer(data, length));
-        printf("Sent: ");
-        for(int i=0;i<length;i++){
-            printf("%02X, ", data[i]);
-        }
-        printf("\n");
-        return true;
-    }
+    void Open(const std::string& port, uint32_t baudrate);
+    bool IsOpen() const;
+    void Close();
+    void SetReadCallback(ReadCallback read_callback);
+    size_t Write(const uint8_t* tx_buf, const size_t& len);
 
 private:
+    void AsynRead();
+    void OnAsioDataRecv(const boost::system::error_code& err, size_t bytes_transferred);
+
+private:
+    std::string port_;
+    uint32_t baudrate_;
     boost::asio::io_service asio_ios_;
     boost::asio::serial_port asio_port_;
-    boost::asio::deadline_timer timer_;
-    bool is_open_;
-    enum { max_read_length = 1024 };
-    uint8_t data_[max_read_length];
-    std::function<void(const uint8_t*, size_t)> callback_;
-
-private:
-    void doRead() {
-        if (!is_open_) return;
-        boost::asio::async_read(asio_port_, boost::asio::buffer(data_, max_read_length), 
-            boost::bind(&BoostSerial::readCallback, this, boost::placeholders::_1, boost::placeholders::_2));
-    }
-
-    bool readComplete(const boost::system::error_code& error, size_t bytes_transferred) {
-        if (error) {
-            printf("Error reading serial port: %s in %s\n", error.message().c_str(), __func__);
-            return false;
-        }
-        timer_.expires_from_now(boost::posix_time::milliseconds(10));
-        timer_.async_wait(boost::bind(&BoostSerial::doRead, this));
-        return true;
-    }
-
-    void readCallback(const boost::system::error_code& error, size_t bytes_transferred) {
-        if (error) {
-            printf("Error reading serial port: %s in %s\n", error.message().c_str(), __func__);
-            return;
-        }
-        if (bytes_transferred > 0 && callback_) {
-            callback_(data_, bytes_transferred);
-        }
-        doRead();
-    }
+    std::unique_ptr<std::thread> recv_thread_ptr_;
+    ReadCallback read_callback_;
+    uint8_t asio_read_buf_[Boost_Serial_Max_Read_Buf_Len];
+    size_t boost_buffer_len_;
 };
+
+BoostSerial::BoostSerial()
+        : asio_ios_(),
+          asio_port_(asio_ios_),
+          recv_thread_ptr_(nullptr),
+          read_callback_(nullptr) {
+    // printf("[BoostSerial] Constructor\n");
+}
+
+BoostSerial::~BoostSerial() {
+    if (asio_port_.is_open()) {
+        Close();
+    }
+    // printf("[BoostSerial] Destructor\n");
+}
+
+void BoostSerial::Open(const std::string& port, uint32_t baudrate) {
+    port_ = port;
+    baudrate_ = baudrate;
+    if (asio_port_.is_open()) {
+        printf("[Serial] Port %s is already open.\n", port_.c_str());
+        return;
+    }
+    // configure boost::asio::serial_port
+    printf("[Serial] Open port %s with baudrate %d\n", port_.c_str(), baudrate_);
+    try {
+        asio_port_.open(port_);
+    } catch (...) {
+    }
+    if (!asio_port_.is_open()) {
+        printf("[Serial] Failed to open port %s.\n", port_.c_str());
+        return;
+    }
+    // set options for serial port
+    asio_port_.set_option(boost::asio::serial_port::baud_rate(baudrate_));
+    asio_port_.set_option(boost::asio::serial_port::character_size(8));
+    asio_port_.set_option(boost::asio::serial_port::parity(boost::asio::serial_port::parity::none));
+    asio_port_.set_option(
+            boost::asio::serial_port::stop_bits(boost::asio::serial_port::stop_bits::one));
+    asio_port_.set_option(
+            boost::asio::serial_port::flow_control(boost::asio::serial_port::flow_control::none));
+    // push the first read request
+    AsynRead();
+    // create thread that will read incoming data asynchronously
+    recv_thread_ptr_.reset(new std::thread([this]() {
+        this->asio_ios_.run();
+        printf("[Serial] Exit receive thread\n");
+    }));
+}
+
+bool BoostSerial::IsOpen() const {
+    return asio_port_.is_open();
+}
+
+void BoostSerial::Close() {
+    if (!asio_port_.is_open()) {
+        printf("[Serial] Port %s is already close\n", port_.c_str());
+        return;
+    }
+    printf("[Serial] Close serial port %s\n", port_.c_str());
+    // finish async read thread and delete it
+    asio_port_.cancel();  // cancel pending async processes
+    asio_ios_.stop();     // stop io_service
+    if (recv_thread_ptr_.get() != nullptr) {
+        recv_thread_ptr_->join();         // join thread
+        recv_thread_ptr_.reset(nullptr);  // delete thread
+    }
+    asio_ios_.reset();              // reset io_service for reopening
+    asio_port_.close();             // close serial port
+}
+
+void BoostSerial::SetReadCallback(ReadCallback read_callback) {
+    if (read_callback_) {
+        printf("[Serial] Read callback is already set\n");
+    } else {
+        read_callback_ = read_callback;
+        printf("[Serial] Set read callback\n");
+    }
+}
+
+size_t BoostSerial::Write(const uint8_t* tx_buf, const size_t& len) {
+    if (!asio_port_.is_open()) {
+        printf("[Serial] Port %s is not open, write fail.\n", port_.c_str());
+        return 0;
+    }
+    return boost::asio::write(asio_port_, boost::asio::buffer(tx_buf, len));
+}
+
+void BoostSerial::AsynRead() {
+    // reads a certain amount of data before the asynchronous operation completes
+    boost_buffer_len_ = 2;
+    boost::asio::async_read(asio_port_, boost::asio::buffer(asio_read_buf_, boost_buffer_len_), 
+        boost::bind(&BoostSerial::OnAsioDataRecv, this,boost::placeholders::_1, boost::placeholders::_2));
+}
+
+void BoostSerial::OnAsioDataRecv(const boost::system::error_code& error, size_t bytes_transferred) {
+    if (error) {
+        std::string err_msg = std::string("[Serial] %%%%%%%%% serial - ") +
+                              std::to_string(error.value()) + std::string(" - ") + error.message();
+        printf("%s\n", err_msg.c_str());
+        return;
+    }
+
+    if (bytes_transferred > 0 && read_callback_) {
+        read_callback_(asio_read_buf_, bytes_transferred);
+    }
+    // asyn read again
+    AsynRead();
+}
 
 int main() {
     uint8_t write_data[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0xFF};
     size_t write_length = sizeof(write_data) / sizeof(uint8_t);
-
+    
     BoostSerial boost_serial;
-    boost_serial.setCallback([](const uint8_t* data, size_t length) {
+    boost_serial.SetReadCallback([](const uint8_t* data, size_t length) {
         printf("Received: ");
         for(int i=0;i<length;i++){
             printf("%02X, ", data[i]);
         }
         printf("\n");
     });
+    boost_serial.Open("/dev/ttyUSB0", 9600);
 
-    boost_serial.open("/dev/ttyUSB0", 9600);
-    if (!boost_serial.isOpen()) {
-        printf("Error opening serial port\n");
-        return 1;
-    }
+    boost_serial.Write(write_data, write_length);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    boost_serial.Write(write_data, write_length);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    boost::thread thread([&boost_serial]() {
-        printf("Boost serial thread started\n");
-        boost_serial.run();
-        printf("Boost serial thread finished\n");
-    });
-
-    boost::this_thread::sleep(boost::posix_time::milliseconds(500));
-    
-    boost_serial.write(write_data, write_length);
-
-    boost::this_thread::sleep(boost::posix_time::milliseconds(2000));
-
-    boost_serial.close();
+    boost_serial.Close();
 
     return 0;
 }
