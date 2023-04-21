@@ -28,6 +28,5 @@ cmake \
 
 make -j${thread_num}
 
-# 5. 运行可执行文件
-echo "Runing $executable_file"
+# 4. 运行可执行文件
 $executable_file

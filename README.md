@@ -12,7 +12,6 @@
 ...
 [ 33%] Linking CXX executable main
 [100%] Built target main
-Runing /home/origin/youlian/boost_serial/build/main
 [Serial] Set read callback
 [Serial] Open port /dev/ttyUSB1 with baudrate 9600
 Received: 01, 02, 03, 04, 05, FF, 
