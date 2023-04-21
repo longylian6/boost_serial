@@ -26,7 +26,7 @@ public:
 
 private:
     void AsynRead();
-    void OnAsioDataRecv(const boost::system::error_code& err, size_t bytes_transferred);
+    void OnAsioDataRecv(const boost::system::error_code& error, size_t bytes_transferred);
 
 private:
     std::string port_;
@@ -127,10 +127,21 @@ size_t BoostSerial::Write(const uint8_t* tx_buf, const size_t& len) {
 }
 
 void BoostSerial::AsynRead() {
-    // reads a certain amount of data before the asynchronous operation completes
-    boost_buffer_len_ = 2;
-    boost::asio::async_read(asio_port_, boost::asio::buffer(asio_read_buf_, boost_buffer_len_), 
-        boost::bind(&BoostSerial::OnAsioDataRecv, this,boost::placeholders::_1, boost::placeholders::_2));
+    /// function1: boost::asio::async_read
+    /// reads a certain amount of data before the asynchronous operation completes
+    /// reference: https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/async_read/overload1.html
+    // boost_buffer_len_ = 1;
+    // boost::asio::async_read(asio_port_, boost::asio::buffer(asio_read_buf_, boost_buffer_len_), 
+    //     boost::bind(&BoostSerial::OnAsioDataRecv, this, boost::placeholders::_1, boost::placeholders::_2));
+
+    /// or function2: boost::asio::serial_port::async_read_some
+    /// asynchronously read data from the serial port and always returns immediately
+    /// reference: https://www.boost.org/doc/libs/1_77_0/doc/html/boost_asio/reference/basic_serial_port/async_read_some.html
+    boost_buffer_len_ = Boost_Serial_Max_Read_Buf_Len;
+    asio_port_.async_read_some(boost::asio::buffer(asio_read_buf_, boost_buffer_len_), 
+            [this](const boost::system::error_code& error, size_t bytes_transferred) {
+                this->OnAsioDataRecv(error, bytes_transferred);
+            });
 }
 
 void BoostSerial::OnAsioDataRecv(const boost::system::error_code& error, size_t bytes_transferred) {
@@ -160,7 +171,7 @@ int main() {
         }
         printf("\n");
     });
-    boost_serial.Open("/dev/ttyUSB0", 9600);
+    boost_serial.Open("/dev/ttyUSB1", 9600);
 
     boost_serial.Write(write_data, write_length);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
